@@ -107,6 +107,9 @@ impl SP1CudaProver {
             return Err(format!("Failed to pull Docker image: {}. Please check your internet connection and Docker permissions.", e).into());
         }
 
+        // CleanUp before starting, there may be a container already running
+        cleanup_container(container_name);
+
         // Start the docker container
         let rust_log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "none".to_string());
         let mut child = Command::new("docker")
@@ -161,15 +164,16 @@ impl SP1CudaProver {
         });
 
         // Kill the container on control-c
-        ctrlc::set_handler(move || {
+        if let Err(e) = ctrlc::try_set_handler(move || {
             tracing::debug!("received Ctrl+C, cleaning up...");
             if !cleanup_flag.load(Ordering::SeqCst) {
                 cleanup_container(cleanup_name);
                 cleanup_flag.store(true, Ordering::SeqCst);
             }
             std::process::exit(0);
-        })
-        .unwrap();
+        }) {
+            eprintln!("Failed to set Ctrl+C handler: {e}");
+        }
 
         // Wait a few seconds for the container to start
         std::thread::sleep(Duration::from_secs(2));
@@ -324,7 +328,7 @@ impl Drop for SP1CudaProver {
 fn cleanup_container(container_name: &str) {
     if let Err(e) = Command::new("docker").args(["rm", "-f", container_name]).output() {
         eprintln!(
-            "Failed to remove container: {}. You may need to manually remove it using 'docker rm -f {}'",
+            "Failed to remove container: {}. Maybe wasn't present. You may need to manually remove it using 'docker rm -f {}'",
             e, container_name
         );
     }
